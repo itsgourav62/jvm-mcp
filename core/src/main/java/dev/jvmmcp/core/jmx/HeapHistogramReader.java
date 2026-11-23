@@ -7,6 +7,7 @@ import java.io.BufferedReader;
 import java.io.ByteArrayInputStream;
 import java.io.InputStream;
 import java.io.InputStreamReader;
+import java.lang.reflect.InaccessibleObjectException;
 import java.lang.reflect.Method;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
@@ -47,6 +48,38 @@ public class HeapHistogramReader {
         try (InputStream in = (InputStream) executeJCmdMethod.invoke(vm, command)) {
             return parseHistogramStream(in, pid, topN, liveOnly);
         }
+    }
+
+    /**
+     * Reads a heap histogram, preferring the Attach API and falling back to the DiagnosticCommand
+     * MBean when the VM handle is absent or {@code executeJCmd} is unavailable.
+     */
+    public HeapHistogram readHistogram(
+            VirtualMachine vm, MBeanServerConnection mbsc, long pid, int topN) throws Exception {
+        return readHistogram(vm, mbsc, pid, topN, true);
+    }
+
+    /**
+     * Reads a heap histogram through the Attach API when possible, otherwise using the JMX
+     * DiagnosticCommand MBean. The same live-only choice is applied to either path.
+     */
+    public HeapHistogram readHistogram(
+            VirtualMachine vm,
+            MBeanServerConnection mbsc,
+            long pid,
+            int topN,
+            boolean liveOnly)
+            throws Exception {
+        if (vm != null) {
+            try {
+                return readHistogram(vm, pid, topN, liveOnly);
+            } catch (NoSuchMethodException
+                    | IllegalAccessException
+                    | InaccessibleObjectException e) {
+                // executeJCmd is HotSpot-specific and may be inaccessible on modular runtimes.
+            }
+        }
+        return readHistogram(mbsc, pid, topN, liveOnly);
     }
 
     /**

@@ -279,6 +279,79 @@ class HeapHistogramReaderTest {
     }
 
     @Test
+    @DisplayName("readHistogram falls back to DiagnosticCommand when executeJCmd is unavailable")
+    void shouldFallBackToDiagnosticCommandWhenExecuteJCmdIsUnavailable() throws Exception {
+        javax.management.MBeanServerConnection mbsc =
+                org.mockito.Mockito.mock(javax.management.MBeanServerConnection.class);
+        org.mockito.Mockito.when(
+                        mbsc.invoke(
+                                org.mockito.ArgumentMatchers.any(javax.management.ObjectName.class),
+                                org.mockito.ArgumentMatchers.eq("gcClassHistogram"),
+                                org.mockito.ArgumentMatchers.any(),
+                                org.mockito.ArgumentMatchers.any()))
+                .thenReturn(SAMPLE_HISTOGRAM);
+
+        HeapHistogram histogram =
+                new HeapHistogramReader()
+                        .readHistogram(new NoExecuteJCmdVirtualMachine(), mbsc, 123L, 2, false);
+
+        assertThat(histogram.pid()).isEqualTo(123L);
+        assertThat(histogram.topClasses()).hasSize(2);
+        assertThat(histogram.liveOnly()).isFalse();
+
+        org.mockito.ArgumentCaptor<Object[]> arguments =
+                org.mockito.ArgumentCaptor.forClass(Object[].class);
+        org.mockito.Mockito.verify(mbsc)
+                .invoke(
+                        org.mockito.ArgumentMatchers.any(javax.management.ObjectName.class),
+                        org.mockito.ArgumentMatchers.eq("gcClassHistogram"),
+                        arguments.capture(),
+                        org.mockito.ArgumentMatchers.any());
+        assertThat((String[]) arguments.getValue()[0]).containsExactly("-all");
+    }
+
+    @Test
+    @DisplayName("readHistogram uses DiagnosticCommand when no VirtualMachine handle is available")
+    void shouldFallBackToDiagnosticCommandWhenVmIsNull() throws Exception {
+        javax.management.MBeanServerConnection mbsc =
+                org.mockito.Mockito.mock(javax.management.MBeanServerConnection.class);
+        org.mockito.Mockito.when(
+                        mbsc.invoke(
+                                org.mockito.ArgumentMatchers.any(javax.management.ObjectName.class),
+                                org.mockito.ArgumentMatchers.eq("gcClassHistogram"),
+                                org.mockito.ArgumentMatchers.any(),
+                                org.mockito.ArgumentMatchers.any()))
+                .thenReturn(SAMPLE_HISTOGRAM);
+
+        HeapHistogram histogram = new HeapHistogramReader().readHistogram(null, mbsc, 123L, 2);
+
+        assertThat(histogram.pid()).isEqualTo(123L);
+        assertThat(histogram.topClasses()).hasSize(2);
+        assertThat(histogram.liveOnly()).isTrue();
+        org.mockito.Mockito.verify(mbsc)
+                .invoke(
+                        org.mockito.ArgumentMatchers.any(javax.management.ObjectName.class),
+                        org.mockito.ArgumentMatchers.eq("gcClassHistogram"),
+                        org.mockito.ArgumentMatchers.any(),
+                        org.mockito.ArgumentMatchers.any());
+    }
+
+    @Test
+    @DisplayName("readHistogram prefers Attach API when executeJCmd is available")
+    void shouldPreferAttachApiWhenExecuteJCmdIsAvailable() throws Exception {
+        FakeVirtualMachine fakeVm = new FakeVirtualMachine();
+        javax.management.MBeanServerConnection mbsc =
+                org.mockito.Mockito.mock(javax.management.MBeanServerConnection.class);
+
+        HeapHistogram histogram = new HeapHistogramReader().readHistogram(fakeVm, mbsc, 123L, 2);
+
+        assertThat(histogram.pid()).isEqualTo(123L);
+        assertThat(histogram.topClasses()).hasSize(2);
+        assertThat(fakeVm.lastCommand).isEqualTo("GC.class_histogram");
+        org.mockito.Mockito.verifyNoInteractions(mbsc);
+    }
+
+    @Test
     @DisplayName(
             "readHistogram propagates NoSuchMethodException when executeJCmd is unavailable so callers can fall back")
     void shouldPropagateMissingExecuteJCmd() {
