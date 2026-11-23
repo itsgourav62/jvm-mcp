@@ -1,6 +1,7 @@
 package dev.jvmmcp.core.spring;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.when;
 
 import com.sun.net.httpserver.HttpServer;
@@ -272,6 +273,83 @@ class ActuatorProbeTest {
         ActuatorProbe probe = new ActuatorProbe();
         Optional<String> result = probe.fetchFromUrl("http://127.0.0.1:1");
         assertThat(result).isEmpty();
+    }
+
+    @Test
+    @DisplayName("fetchFromUrl propagates SSRF rejections instead of returning empty")
+    void shouldPropagateSsrfRejectionsWhenFetchingFromUrl() {
+        ActuatorProbe probe = new ActuatorProbe();
+
+        assertThatThrownBy(
+                        () ->
+                                probe.fetchFromUrl(
+                                        "http://169.254.169.254/latest/meta-data"))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("SSRF Protection")
+                .hasMessageContaining("not a loopback address");
+    }
+
+    @Test
+    @DisplayName("fetchFromUrl rejects unsafe URL schemes and URI components")
+    void shouldRejectUnsafeUrlsWhenFetchingFromUrl() {
+        ActuatorProbe probe = new ActuatorProbe();
+
+        assertThatThrownBy(() -> probe.fetchFromUrl("file:///etc/passwd"))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("URL scheme must be http or https");
+
+        assertThatThrownBy(() -> probe.fetchFromUrl("http://user:pass@localhost:8080"))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("UserInfo not permitted");
+
+        assertThatThrownBy(() -> probe.fetchFromUrl("http://localhost:8080?token=secret"))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("Query parameters not permitted");
+
+        assertThatThrownBy(() -> probe.fetchFromUrl("http://localhost:8080#fragment"))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("URI fragments not permitted");
+    }
+
+    @Test
+    @DisplayName("fetchFromUrl rejects null or blank base URLs")
+    void shouldRejectNullOrBlankBaseUrlWhenFetching() {
+        ActuatorProbe probe = new ActuatorProbe();
+
+        assertThatThrownBy(() -> probe.fetchFromUrl(null))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("must not be null or blank");
+
+        assertThatThrownBy(() -> probe.fetchFromUrl("   "))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("must not be null or blank");
+
+        assertThatThrownBy(() -> ActuatorProbe.candidateBeansUrls(null))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("must not be null or blank");
+    }
+
+    @Test
+    @DisplayName("fetchFromUrl removes all trailing slashes before appending the beans path")
+    void shouldNormalizeMultipleTrailingSlashesWhenFetchingFromUrl() throws Exception {
+        AtomicReference<String> requestedPath = new AtomicReference<>();
+        server.createContext(
+                "/actuator/beans",
+                exchange -> {
+                    requestedPath.set(exchange.getRequestURI().getRawPath());
+                    byte[] body = BEANS_PAYLOAD.getBytes(StandardCharsets.UTF_8);
+                    exchange.sendResponseHeaders(200, body.length);
+                    try (java.io.OutputStream os = exchange.getResponseBody()) {
+                        os.write(body);
+                    }
+                });
+        server.start();
+
+        ActuatorProbe probe = new ActuatorProbe();
+        Optional<String> result = probe.fetchFromUrl("http://127.0.0.1:" + port + "///");
+
+        assertThat(result).contains(BEANS_PAYLOAD);
+        assertThat(requestedPath.get()).isEqualTo("/actuator/beans");
     }
 
     @Test
